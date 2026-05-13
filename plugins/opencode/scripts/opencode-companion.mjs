@@ -228,11 +228,11 @@ async function handleAdversarialReview(argv) {
 async function handleTask(argv) {
   const { options, positional } = parseArgs(argv, {
     valueOptions: ["model", "agent"],
-    booleanOptions: ["write", "background", "wait", "resume-last", "fresh"],
+    booleanOptions: ["write", "background", "wait", "resume", "resume-last", "fresh"],
   });
 
   const taskText = extractTaskText(argv, ["model", "agent"], [
-    "write", "background", "wait", "resume-last", "fresh",
+    "write", "background", "wait", "resume", "resume-last", "fresh",
   ]);
 
   if (!taskText) {
@@ -245,8 +245,14 @@ async function handleTask(argv) {
   const agentName = options.agent ?? (isWrite ? "build" : "plan");
 
   // Check for resume
+  const resumeLast = Boolean(options["resume"] || options["resume-last"]);
+  const fresh = Boolean(options.fresh);
+  if (resumeLast && fresh) {
+    console.error("Choose either --resume/--resume-last or --fresh.");
+    process.exit(1);
+  }
   let resumeSessionId = null;
-  if (options["resume-last"]) {
+  if (resumeLast) {
     const state = loadState(workspace);
     const sessionId = getClaudeSessionId();
     const lastTask = state.jobs
