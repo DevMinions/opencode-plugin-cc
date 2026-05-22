@@ -1,10 +1,10 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "yesongh-opencode",
+  "name": "devminions-opencode",
   "version": "1.0.2",
   "description": "OpenCode plugins to use in Claude Code for delegation and code review.",
   "owner": {
-    "name": "yesongh"
+    "name": "DevMinions"
   },
   "plugins": [
     {
@@ -12,7 +12,7 @@
       "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
       "version": "1.0.2",
       "author": {
-        "name": "yesongh"
+        "name": "DevMinions"
       },
       "source": "./plugins/opencode",
       "category": "development"
