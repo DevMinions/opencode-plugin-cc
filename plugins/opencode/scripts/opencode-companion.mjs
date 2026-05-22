@@ -13,7 +13,7 @@ import { isOpencodeInstalled, getOpencodeVersion, spawnDetached } from "./lib/pr
 import { isServerRunning, ensureServer, createClient, connect } from "./lib/opencode-server.mjs";
 import { resolveWorkspace } from "./lib/workspace.mjs";
 import { loadState, updateState, upsertJob, generateJobId, jobDataPath } from "./lib/state.mjs";
-import { buildStatusSnapshot, resolveResultJob, resolveCancelableJob, enrichJob } from "./lib/job-control.mjs";
+import { buildStatusSnapshot, resolveResultJob, resolveWaitableJob, resolveCancelableJob, enrichJob } from "./lib/job-control.mjs";
 import { createJobRecord, runTrackedJob, getClaudeSessionId } from "./lib/tracked-jobs.mjs";
 import { renderStatus, renderResult, renderReview, renderSetup } from "./lib/render.mjs";
 import { buildReviewPrompt, buildTaskPrompt } from "./lib/prompts.mjs";
@@ -287,6 +287,7 @@ async function handleTask(argv) {
     spawnDetached("node", workerArgs, { cwd: workspace });
     console.log(`OpenCode task started in background: ${job.id}`);
     console.log("Check `/opencode:status` for progress.");
+    console.log(`Block until done and print the result: \`/opencode:result ${job.id} --wait\``);
     return;
   }
 
@@ -441,11 +442,45 @@ async function handleStatus(argv) {
 }
 
 async function handleResult(argv) {
-  const { positional } = parseArgs(argv, {});
+  const { positional, options } = parseArgs(argv, {
+    booleanOptions: ["wait"],
+    valueOptions: ["timeout"],
+  });
   const ref = positional[0];
 
   const workspace = await resolveWorkspace();
-  const state = loadState(workspace);
+  let state = loadState(workspace);
+
+  // --wait: block until the target job reaches a terminal state, then render
+  // it. Deterministic retrieval that does not depend on a background relay.
+  if (options.wait) {
+    const target = resolveWaitableJob(state.jobs ?? [], ref);
+    if (target.ambiguous) {
+      console.error("Ambiguous job reference. Please provide a more specific ID prefix.");
+      process.exit(1);
+    }
+    if (!target.job) {
+      console.log("No matching job found to wait for.");
+      return;
+    }
+    const jobId = target.job.id;
+    const timeoutMs = options.timeout ? Number(options.timeout) * 1000 : 600000;
+    const deadline = Date.now() + timeoutMs;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    while (true) {
+      state = loadState(workspace);
+      const j = (state.jobs ?? []).find((x) => x.id === jobId);
+      if (j && (j.status === "completed" || j.status === "failed")) break;
+      if (Date.now() >= deadline) {
+        console.error(
+          `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for ${jobId}. ` +
+            "Check `/opencode:status`."
+        );
+        process.exit(1);
+      }
+      await sleep(1000);
+    }
+  }
 
   const { job, ambiguous } = resolveResultJob(state.jobs ?? [], ref);
 

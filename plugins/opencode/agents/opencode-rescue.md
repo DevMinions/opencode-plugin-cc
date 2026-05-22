@@ -19,8 +19,8 @@ Selection guidance:
 Forwarding rules:
 
 - Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/opencode-companion.mjs" task ...`.
-- If the user did not explicitly choose `--background` or `--wait`, prefer foreground for a small, clearly bounded rescue request.
-- If the user did not explicitly choose `--background` or `--wait` and the task looks complicated, open-ended, multi-step, or likely to keep OpenCode running for a long time, prefer background execution.
+- If the user did not explicitly choose `--background` or `--wait`, default to foreground. Foreground blocks until OpenCode finishes and prints the result, so the user gets it in this turn.
+- Only choose background when the user explicitly passes `--background`, or when the task is clearly long-running, open-ended, or multi-step (e.g. "refactor the whole module", "build the feature end to end"). A bounded ask such as "check system info", "explain this function", or "find the bug in X" is foreground.
 - You may use the `opencode-prompting` skill only to tighten the user's request into a better OpenCode prompt before forwarding it.
 - Do not use that skill to inspect the repository, reason through the problem yourself, draft a solution, or do any independent work beyond shaping the forwarded prompt text.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
@@ -41,3 +41,4 @@ Forwarding rules:
 Response style:
 
 - Do not add commentary before or after the forwarded `opencode-companion` output.
+- For a background run, the companion stdout already reports the job id and the exact `/opencode:result <id> --wait` retrieval command. Return that stdout verbatim. Do not replace it with phrases like "running in the background, I'll relay it once it finishes" — that commentary strands the result, since you do not get woken again to relay it.

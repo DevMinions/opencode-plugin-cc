@@ -130,6 +130,24 @@ export function resolveResultJob(jobs, ref) {
 }
 
 /**
+ * Resolve the job to block on for `result --wait`. Unlike resolveResultJob,
+ * this matches jobs in any state (a job we wait on is usually still running).
+ * Without a ref, prefer the most recent running job, else the latest finished.
+ * @param {object[]} jobs
+ * @param {string} [ref]
+ * @returns {{ job: object|null, ambiguous: boolean }}
+ */
+export function resolveWaitableJob(jobs, ref) {
+  if (ref) return matchJobReference(jobs, ref);
+  const running = sortJobsNewestFirst(jobs.filter((j) => j.status === "running"));
+  if (running.length > 0) return { job: running[0], ambiguous: false };
+  const finished = sortJobsNewestFirst(
+    jobs.filter((j) => j.status === "completed" || j.status === "failed")
+  );
+  return { job: finished[0] ?? null, ambiguous: false };
+}
+
+/**
  * Resolve a job that can be canceled (running).
  * @param {object[]} jobs
  * @param {string} [ref]
