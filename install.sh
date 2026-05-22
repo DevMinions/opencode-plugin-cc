@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # One-line installer for opencode-plugin-cc
 # Usage (inside Claude Code):
-#   ! curl -fsSL https://raw.githubusercontent.com/yesongh/opencode-plugin-cc/main/install.sh | bash
+#   ! curl -fsSL https://raw.githubusercontent.com/DevMinions/opencode-plugin-cc/main/install.sh | bash
 #
 # Or clone + run locally:
-#   ! bash <(curl -fsSL https://raw.githubusercontent.com/yesongh/opencode-plugin-cc/main/install.sh)
+#   ! bash <(curl -fsSL https://raw.githubusercontent.com/DevMinions/opencode-plugin-cc/main/install.sh)
 
 set -euo pipefail
 
-REPO="yesongh/opencode-plugin-cc"
+REPO="DevMinions/opencode-plugin-cc"
 PLUGIN_NAME="opencode"
-MARKETPLACE_NAME="yesongh-opencode"
+MARKETPLACE_NAME="devminions-opencode"
 BRANCH="main"
 
 CLAUDE_DIR="$HOME/.claude"
