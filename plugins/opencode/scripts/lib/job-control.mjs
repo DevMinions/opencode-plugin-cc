@@ -121,7 +121,9 @@ export function matchJobReference(jobs, ref) {
  * @returns {{ job: object|null, ambiguous: boolean }}
  */
 export function resolveResultJob(jobs, ref) {
-  const finished = jobs.filter((j) => j.status === "completed" || j.status === "failed");
+  const finished = jobs.filter(
+    (j) => j.status === "completed" || j.status === "failed" || j.status === "incomplete"
+  );
   if (!ref) {
     const sorted = sortJobsNewestFirst(finished);
     return { job: sorted[0] ?? null, ambiguous: false };

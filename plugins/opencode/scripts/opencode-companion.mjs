@@ -19,6 +19,7 @@ import { renderStatus, renderResult, renderReview, renderSetup } from "./lib/ren
 import { buildReviewPrompt, buildTaskPrompt } from "./lib/prompts.mjs";
 import { getDiff, getStatus as getGitStatus } from "./lib/git.mjs";
 import { readJson } from "./lib/fs.mjs";
+import { detectIncompleteFinish, changedFilesFromParts } from "./lib/response.mjs";
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(import.meta.dirname, "..");
 
@@ -321,28 +322,25 @@ async function handleTask(argv) {
       report("finalizing", "Processing task output...");
 
       const text = extractResponseText(response);
-
-      // Get changed files if write mode
-      let changedFiles = [];
-      if (isWrite) {
-        try {
-          const diff = await client.getSessionDiff(sessionId);
-          if (diff?.files) {
-            changedFiles = diff.files.map((f) => f.path || f.name).filter(Boolean);
-          }
-        } catch {
-          // diff endpoint may not be available
-        }
-      }
+      const changedFiles = await collectChangedFiles(client, sessionId, response, isWrite);
+      const finishReason = detectIncompleteFinish(response);
 
       return {
         rendered: text,
         messages: response,
         changedFiles,
         summary: text.slice(0, 500),
+        incomplete: !!finishReason,
+        finishReason: finishReason ?? undefined,
       };
     });
 
+    if (result.incomplete) {
+      console.log(
+        `[incomplete] OpenCode ended abnormally (finish: ${result.finishReason}). ` +
+          "Partial output below; resume with `--resume`."
+      );
+    }
     console.log(result.rendered);
   } catch (err) {
     console.error(`Task failed: ${err.message}`);
@@ -392,9 +390,18 @@ async function handleTaskWorker(argv) {
       const response = await client.sendPrompt(sessionId, prompt, sendOpts);
 
       const text = extractResponseText(response);
+      const changedFiles = await collectChangedFiles(client, sessionId, response, isWrite);
+      const finishReason = detectIncompleteFinish(response);
       report("finalizing", "Done");
 
-      return { rendered: text, summary: text.slice(0, 500) };
+      return {
+        rendered: text,
+        messages: response,
+        changedFiles,
+        summary: text.slice(0, 500),
+        incomplete: !!finishReason,
+        finishReason: finishReason ?? undefined,
+      };
     });
   } catch (err) {
     // Error is already logged by runTrackedJob
@@ -470,7 +477,7 @@ async function handleResult(argv) {
     while (true) {
       state = loadState(workspace);
       const j = (state.jobs ?? []).find((x) => x.id === jobId);
-      if (j && (j.status === "completed" || j.status === "failed")) break;
+      if (j && (j.status === "completed" || j.status === "failed" || j.status === "incomplete")) break;
       if (Date.now() >= deadline) {
         console.error(
           `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for ${jobId}. ` +
@@ -594,6 +601,31 @@ function extractResponseText(response) {
   }
 
   return JSON.stringify(response, null, 2);
+}
+
+/**
+ * Collect the list of files changed by a write-mode task: the session diff
+ * first, falling back to write/edit tool-call parts when the diff is empty.
+ * @param {object} client
+ * @param {string} sessionId
+ * @param {object} response
+ * @param {boolean} isWrite
+ * @returns {Promise<string[]>}
+ */
+async function collectChangedFiles(client, sessionId, response, isWrite) {
+  if (!isWrite) return [];
+  const files = new Set();
+  try {
+    const diff = await client.getSessionDiff(sessionId);
+    for (const f of diff?.files ?? []) {
+      const p = f.path || f.name;
+      if (p) files.add(p);
+    }
+  } catch {
+    // diff endpoint may not be available
+  }
+  for (const p of changedFilesFromParts(response)) files.add(p);
+  return [...files];
 }
 
 /**

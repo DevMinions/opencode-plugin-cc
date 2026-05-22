@@ -79,4 +79,33 @@ describe("renderResult", () => {
     );
     assert.ok(output.includes("Connection timeout"));
   });
+
+  // Regression: messages may be a single { info, parts } object, not an array.
+  it("does not crash when messages is a single message object", () => {
+    const resultData = {
+      messages: {
+        info: { role: "assistant", finish: "unknown" },
+        parts: [
+          { type: "step-start" },
+          { type: "text", text: "now implementing the fix" },
+          { type: "step-finish", reason: "unknown" },
+        ],
+      },
+    };
+    let output;
+    assert.doesNotThrow(() => {
+      output = renderResult({ id: "task-3", type: "task", status: "completed", elapsed: "3s" }, resultData);
+    });
+    assert.ok(output.includes("now implementing the fix"));
+  });
+
+  it("surfaces a resume hint for an incomplete job", () => {
+    const output = renderResult(
+      { id: "task-4", type: "task", status: "incomplete", elapsed: "4s", finishReason: "unknown" },
+      { rendered: "wrote tests, about to implement" }
+    );
+    assert.ok(output.includes("incomplete") || output.includes("abnormally"));
+    assert.ok(output.includes("--resume"));
+    assert.ok(output.includes("unknown"));
+  });
 });

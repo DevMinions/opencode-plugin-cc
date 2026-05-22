@@ -56,6 +56,15 @@ describe("job-control", () => {
     assert.equal(job.id, "task-ghi");
   });
 
+  it("resolveResultJob includes incomplete jobs", () => {
+    const withIncomplete = [
+      ...jobs,
+      { id: "task-inc", status: "incomplete", type: "task", updatedAt: "2026-01-01T03:00:00Z", createdAt: "2026-01-01T02:30:00Z" },
+    ];
+    const { job } = resolveResultJob(withIncomplete, "task-inc");
+    assert.equal(job.id, "task-inc");
+  });
+
   it("resolveCancelableJob returns running job", () => {
     const { job } = resolveCancelableJob(jobs);
     assert.equal(job.id, "task-def");

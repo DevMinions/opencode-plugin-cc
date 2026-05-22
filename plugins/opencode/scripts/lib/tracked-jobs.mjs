@@ -65,20 +65,24 @@ export async function runTrackedJob(workspacePath, job, runner) {
     report("starting", `Job ${job.id} started`);
     const result = await runner({ report, log });
 
-    // Mark as completed
-    upsertJob(workspacePath, {
-      id: job.id,
-      status: "completed",
-      completedAt: new Date().toISOString(),
-      result: result?.rendered ?? result?.summary ?? null,
-    });
-
-    // Write result data file
+    // Write result data file first, so a `result --wait` poller that observes
+    // the terminal status always finds the data already on disk.
     const dataFile = jobDataPath(workspacePath, job.id);
     ensureDir(path.dirname(dataFile));
     fs.writeFileSync(dataFile, JSON.stringify(result, null, 2), "utf8");
 
-    report("completed", `Job ${job.id} completed`);
+    // Mark terminal. A runner may report an abnormal OpenCode end via
+    // `result.incomplete`; that is not a clean "completed".
+    const status = result?.incomplete ? "incomplete" : "completed";
+    upsertJob(workspacePath, {
+      id: job.id,
+      status,
+      completedAt: new Date().toISOString(),
+      finishReason: result?.finishReason,
+      result: result?.rendered ?? result?.summary ?? null,
+    });
+
+    report(status, `Job ${job.id} ${status}`);
     return result;
   } catch (err) {
     upsertJob(workspacePath, {

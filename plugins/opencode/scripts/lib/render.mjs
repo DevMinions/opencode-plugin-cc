@@ -62,6 +62,13 @@ export function renderResult(job, resultData) {
     lines.push(`- **OpenCode Session**: ${job.opencodeSessionId}`);
   }
 
+  if (job.status === "incomplete") {
+    const reason = job.finishReason ?? resultData?.finishReason ?? "unknown";
+    lines.push(
+      `\n> ⚠️ OpenCode ended abnormally (finish: ${reason}). Output below is partial — resume with \`--resume\`.`
+    );
+  }
+
   lines.push("");
 
   if (job.status === "failed") {
@@ -70,8 +77,11 @@ export function renderResult(job, resultData) {
     if (resultData.rendered) {
       lines.push(`### Output\n\n${resultData.rendered}`);
     } else if (resultData.messages) {
-      // Extract the last assistant message
-      const assistantMsgs = resultData.messages.filter((m) => m.role === "assistant");
+      // `messages` may be an array or a single { info, parts } message object.
+      const msgs = Array.isArray(resultData.messages)
+        ? resultData.messages
+        : [resultData.messages];
+      const assistantMsgs = msgs.filter((m) => (m.role ?? m.info?.role) === "assistant");
       const last = assistantMsgs[assistantMsgs.length - 1];
       if (last) {
         const text = extractMessageText(last);
