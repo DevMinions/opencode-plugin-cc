@@ -60,7 +60,7 @@ async function main() {
     const client = await connect({ cwd: workspace });
     const session = await client.createSession({ title: "Stop Review Gate" });
 
-    const response = await client.sendPrompt(session.id, prompt, {
+    const response = await client.sendPromptAndWait(session.id, prompt, {
       agent: "plan", // read-only review
     });
 

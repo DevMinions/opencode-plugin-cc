@@ -4,9 +4,20 @@
 
 import { spawn } from "node:child_process";
 
+import { isSessionBusy, lastAssistantMessage } from "./response.mjs";
+
 const DEFAULT_PORT = 4096;
 const DEFAULT_HOST = "127.0.0.1";
 const SERVER_START_TIMEOUT = 30_000;
+
+// Per-request HTTP timeout for short calls (status/messages/dispatch). Long
+// tasks never ride a single request — see sendPromptAndWait.
+const REQUEST_TIMEOUT = Number(process.env.OPENCODE_REQUEST_TIMEOUT_MS) || 300_000;
+// Overall budget for a task to finish while we poll for completion.
+const TASK_TIMEOUT = Number(process.env.OPENCODE_TASK_TIMEOUT_MS) || 1_800_000; // 30 min
+const POLL_INTERVAL = Number(process.env.OPENCODE_POLL_INTERVAL_MS) || 2_000;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Check if an OpenCode server is already running on the given port.
@@ -88,7 +99,7 @@ export function createClient(baseUrl, opts = {}) {
       method,
       headers,
       body: body != null ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(300_000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -162,6 +173,53 @@ export function createClient(baseUrl, opts = {}) {
       if (opts.agent) body.agent = opts.agent;
       if (opts.model) body.model = opts.model;
       return request("POST", `/session/${sessionId}/prompt_async`, body);
+    },
+
+    /**
+     * Dispatch a prompt asynchronously, then poll session status until the
+     * session is no longer busy, and return the final assistant message
+     * ({ info, parts }) — the same shape the synchronous sendPrompt returned.
+     *
+     * No single fetch is held open for the task's whole duration, so this is
+     * immune to the ~5-minute headers timeout that breaks the synchronous path
+     * on long tasks. Transient status-poll errors are retried, not treated as
+     * task failure.
+     * @param {string} sessionId
+     * @param {string} promptText
+     * @param {object} [opts] - { agent, model, timeoutMs, pollMs }
+     * @returns {Promise<object|null>}
+     */
+    sendPromptAndWait: async (sessionId, promptText, opts = {}) => {
+      const body = { parts: [{ type: "text", text: promptText }] };
+      if (opts.agent) body.agent = opts.agent;
+      if (opts.model) body.model = opts.model;
+      await request("POST", `/session/${sessionId}/prompt_async`, body);
+
+      const pollMs = opts.pollMs ?? POLL_INTERVAL;
+      const deadline = Date.now() + (opts.timeoutMs ?? TASK_TIMEOUT);
+      while (true) {
+        await sleep(pollMs);
+        let statusMap;
+        try {
+          statusMap = await request("GET", "/session/status");
+        } catch {
+          // Transient poll failure: the session may still be running.
+          // Retry rather than declaring the task failed (avoids false negatives).
+          if (Date.now() > deadline) break;
+          continue;
+        }
+        if (!isSessionBusy(statusMap, sessionId)) break;
+        if (Date.now() > deadline) {
+          throw new Error(
+            `Timed out after ${Math.round((opts.timeoutMs ?? TASK_TIMEOUT) / 1000)}s ` +
+              `waiting for session ${sessionId}. It may still be running — ` +
+              "check `/opencode:status` and the OpenCode logs."
+          );
+        }
+      }
+
+      const messages = await request("GET", `/session/${sessionId}/message`);
+      return lastAssistantMessage(messages);
     },
 
     // Agents

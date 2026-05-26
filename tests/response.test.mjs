@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { detectIncompleteFinish, changedFilesFromParts } from "../plugins/opencode/scripts/lib/response.mjs";
+import {
+  detectIncompleteFinish,
+  changedFilesFromParts,
+  isSessionBusy,
+  lastAssistantMessage,
+} from "../plugins/opencode/scripts/lib/response.mjs";
 
 describe("detectIncompleteFinish", () => {
   it("flags an abnormal finish reason from info", () => {
@@ -49,5 +54,47 @@ describe("changedFilesFromParts", () => {
     assert.deepEqual(changedFilesFromParts({}), []);
     assert.deepEqual(changedFilesFromParts("x"), []);
     assert.deepEqual(changedFilesFromParts({ parts: [{ type: "tool", tool: "write" }] }), []);
+  });
+});
+
+describe("isSessionBusy", () => {
+  const map = { "ses-a": { type: "busy" }, "ses-b": { type: "idle" } };
+
+  it("is true while the session is busy", () => {
+    assert.equal(isSessionBusy(map, "ses-a"), true);
+  });
+
+  it("is false when the session left the status map (completed)", () => {
+    assert.equal(isSessionBusy(map, "ses-gone"), false);
+  });
+
+  it("is false for a non-busy state", () => {
+    assert.equal(isSessionBusy(map, "ses-b"), false);
+  });
+
+  it("is false for a missing or empty map", () => {
+    assert.equal(isSessionBusy(undefined, "ses-a"), false);
+    assert.equal(isSessionBusy({}, "ses-a"), false);
+  });
+});
+
+describe("lastAssistantMessage", () => {
+  it("returns the last assistant message ({info,parts})", () => {
+    const msgs = [
+      { info: { role: "user" }, parts: [] },
+      { info: { role: "assistant" }, parts: [{ type: "text", text: "first" }] },
+      { info: { role: "assistant" }, parts: [{ type: "text", text: "last" }] },
+    ];
+    assert.equal(lastAssistantMessage(msgs).parts[0].text, "last");
+  });
+
+  it("falls back to the last message when no assistant role present", () => {
+    const msgs = [{ role: "tool" }, { role: "system" }];
+    assert.deepEqual(lastAssistantMessage(msgs), { role: "system" });
+  });
+
+  it("returns null for empty or non-array input", () => {
+    assert.equal(lastAssistantMessage([]), null);
+    assert.equal(lastAssistantMessage(undefined), null);
   });
 });

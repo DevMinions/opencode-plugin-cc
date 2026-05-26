@@ -56,3 +56,28 @@ export function changedFilesFromParts(response) {
   }
   return [...files];
 }
+
+/**
+ * Whether a session is still running, per the /session/status map
+ * ({ [sessionId]: { type: "busy" | ... } }). A session that has left the map
+ * (key absent) is no longer busy.
+ * @param {object} statusMap
+ * @param {string} sessionId
+ * @returns {boolean}
+ */
+export function isSessionBusy(statusMap, sessionId) {
+  const entry = statusMap?.[sessionId];
+  return !!entry && entry.type === "busy";
+}
+
+/**
+ * Pick the last assistant message from a /session/:id/message array.
+ * Falls back to the last message of any role, else null.
+ * @param {Array} messages
+ * @returns {object|null}
+ */
+export function lastAssistantMessage(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  const assistant = messages.filter((m) => (m?.info?.role ?? m?.role) === "assistant");
+  return assistant[assistant.length - 1] ?? messages[messages.length - 1] ?? null;
+}

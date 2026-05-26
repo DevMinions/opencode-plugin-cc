@@ -144,7 +144,7 @@ async function handleReview(argv) {
       report("reviewing", "Running review...");
       log(`Prompt length: ${prompt.length} chars`);
 
-      const response = await client.sendPrompt(session.id, prompt, {
+      const response = await client.sendPromptAndWait(session.id, prompt, {
         agent: "plan", // read-only agent for reviews
       });
 
@@ -199,7 +199,7 @@ async function handleAdversarialReview(argv) {
       report("reviewing", "Running adversarial review...");
       log(`Prompt length: ${prompt.length} chars, focus: ${focus || "(none)"}`);
 
-      const response = await client.sendPrompt(session.id, prompt, {
+      const response = await client.sendPromptAndWait(session.id, prompt, {
         agent: "plan",
       });
 
@@ -317,7 +317,7 @@ async function handleTask(argv) {
       const sendOpts = { agent: agentName };
       if (options.model) sendOpts.model = parseModelOption(options.model);
 
-      const response = await client.sendPrompt(sessionId, prompt, sendOpts);
+      const response = await client.sendPromptAndWait(sessionId, prompt, sendOpts);
 
       report("finalizing", "Processing task output...");
 
@@ -387,7 +387,7 @@ async function handleTaskWorker(argv) {
       const sendOpts = { agent: agentName };
       if (options.model) sendOpts.model = parseModelOption(options.model);
 
-      const response = await client.sendPrompt(sessionId, prompt, sendOpts);
+      const response = await client.sendPromptAndWait(sessionId, prompt, sendOpts);
 
       const text = extractResponseText(response);
       const changedFiles = await collectChangedFiles(client, sessionId, response, isWrite);
