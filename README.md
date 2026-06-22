@@ -4,7 +4,7 @@
 > [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) by OpenAI.
 > The plugin architecture, command structure, and design patterns are derived from
 > the original codex-plugin-cc project, adapted to work with
-> [OpenCode](https://github.com/anomalyco/opencode) instead of Codex.
+> [OpenCode](https://github.com/sst/opencode) instead of Codex.
 
 Use OpenCode from inside Claude Code for code reviews or to delegate tasks.
 
@@ -20,7 +20,7 @@ they already have.
 ## Requirements
 
 - [Claude Code](https://claude.com/claude-code) (CLI, desktop app, or IDE extension)
-- [OpenCode](https://github.com/anomalyco/opencode) installed (`npm i -g opencode-ai` or `brew install opencode`)
+- [OpenCode](https://github.com/sst/opencode) installed (`npm i -g opencode-ai` or `brew install opencode`)
 - A configured AI provider in OpenCode (Claude, OpenAI, Google, etc.)
 - Node.js 18.18 or later
 
@@ -29,7 +29,7 @@ they already have.
 Inside Claude Code, run:
 
 ```
-! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash
+! curl -fsSL https://raw.githubusercontent.com/DevMinions/opencode-plugin-cc/main/install.sh | bash
 ```
 
 Then reload the plugin:
@@ -71,7 +71,7 @@ To check your configured providers:
 ### Uninstall
 
 ```
-/plugin uninstall opencode@tasict-opencode-plugin-cc
+/plugin uninstall opencode@devminions-opencode
 /reload-plugins
 ```
 
@@ -106,7 +106,7 @@ When enabled via `/opencode:setup --enable-review-gate`, a Stop hook runs a targ
 <details>
 <summary><strong>Plugin not loading after install (0 plugins)</strong></summary>
 
-1. Re-run the installer: `! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash`
+1. Re-run the installer: `! curl -fsSL https://raw.githubusercontent.com/DevMinions/opencode-plugin-cc/main/install.sh | bash`
 2. Run `/reload-plugins` again.
 3. If still failing, restart Claude Code.
 </details>
@@ -132,15 +132,16 @@ The script tries SSH first, then HTTPS. If both fail:
 ## Architecture
 
 Unlike codex-plugin-cc which uses JSON-RPC over stdin/stdout, this plugin communicates with
-OpenCode via its HTTP REST API + Server-Sent Events (SSE) for streaming. The server is automatically
-started and managed by the companion scripts.
+OpenCode over its HTTP API using OpenCode's official typed client (`@opencode-ai/sdk`, vendored
+under `plugins/opencode/scripts/vendor/` so no install step is needed). The server is automatically
+started and managed by the companion scripts, which poll session status for task completion.
 
 ```
 codex-plugin-cc                          opencode-plugin-cc
 +----------------------+                 +------------------------+
-| JSON-RPC over stdio  |                 | HTTP REST + SSE        |
+| JSON-RPC over stdio  |                 | HTTP via @opencode/sdk |
 | codex app-server     |      vs.        | opencode serve         |
-| Broker multiplexing  |                 | Native HTTP (no broker)|
+| Broker multiplexing  |                 | Typed client (no broker)|
 | codex CLI binary     |                 | opencode CLI binary    |
 +----------------------+                 +------------------------+
 ```

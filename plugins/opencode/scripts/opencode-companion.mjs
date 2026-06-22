@@ -74,10 +74,10 @@ async function handleSetup(argv) {
     if (serverRunning) {
       try {
         const client = createClient("http://127.0.0.1:4096");
-        const providerList = await client.listProviders();
-        if (Array.isArray(providerList)) {
-          providers = providerList.map((p) => p.id ?? p.name).filter(Boolean);
-        }
+        // OpenCode returns { all, default, connected }. `connected` is the list
+        // of authenticated provider ids — the ones actually usable.
+        const providerData = await client.listProviders();
+        providers = Array.isArray(providerData?.connected) ? providerData.connected : [];
       } catch {
         // Server may not be fully ready
       }
@@ -615,16 +615,37 @@ function extractResponseText(response) {
 async function collectChangedFiles(client, sessionId, response, isWrite) {
   if (!isWrite) return [];
   const files = new Set();
+
+  // Primary source: write/edit tool-call parts across ALL session messages.
+  // sendPromptAndWait returns only the final assistant message, but the tool
+  // calls that actually touched files are usually in earlier messages — so we
+  // scan the whole session, not just `response`.
+  try {
+    const messages = await client.getMessages(sessionId);
+    for (const m of messages ?? []) {
+      for (const p of changedFilesFromParts(m)) files.add(p);
+    }
+  } catch {
+    // If listing messages fails, fall back to the one message we already have.
+    for (const p of changedFilesFromParts(response)) files.add(p);
+  }
+
+  // Secondary, best-effort: the session diff. session.diff returns
+  // Array<FileDiff> ({ file, before, after, ... }) — the path lives in `f.file`
+  // (older shapes used { files: [{ path|name }] }, kept as defensive fallbacks).
+  // It only reflects tracked-file changes, so the tool parts above remain the
+  // authoritative source (esp. for brand-new untracked files).
   try {
     const diff = await client.getSessionDiff(sessionId);
-    for (const f of diff?.files ?? []) {
-      const p = f.path || f.name;
+    const fileDiffs = Array.isArray(diff) ? diff : diff?.files ?? [];
+    for (const f of fileDiffs) {
+      const p = f.file || f.path || f.name;
       if (p) files.add(p);
     }
   } catch {
     // diff endpoint may not be available
   }
-  for (const p of changedFilesFromParts(response)) files.add(p);
+
   return [...files];
 }
 
