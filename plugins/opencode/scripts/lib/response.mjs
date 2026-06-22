@@ -59,15 +59,18 @@ export function changedFilesFromParts(response) {
 
 /**
  * Whether a session is still running, per the /session/status map
- * ({ [sessionId]: { type: "busy" | ... } }). A session that has left the map
- * (key absent) is no longer busy.
+ * ({ [sessionId]: SessionStatus }). SessionStatus is one of
+ * { type: "idle" } | { type: "retry", ... } | { type: "busy" }. Both "busy"
+ * and "retry" mean still-running — treating "retry" (e.g. a provider rate-limit
+ * backoff) as done would grab an incomplete message. A session that has left
+ * the map (key absent) is no longer busy.
  * @param {object} statusMap
  * @param {string} sessionId
  * @returns {boolean}
  */
 export function isSessionBusy(statusMap, sessionId) {
   const entry = statusMap?.[sessionId];
-  return !!entry && entry.type === "busy";
+  return !!entry && (entry.type === "busy" || entry.type === "retry");
 }
 
 /**

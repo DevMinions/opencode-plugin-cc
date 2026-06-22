@@ -1,17 +1,22 @@
 // OpenCode HTTP API client.
 // Unlike codex-plugin-cc which uses JSON-RPC over stdin/stdout,
-// OpenCode exposes a REST API + SSE. This module wraps that API.
+// OpenCode exposes a REST API + SSE. This module wraps that API via the
+// official, typed `@opencode-ai/sdk` client (vendored under scripts/vendor),
+// keeping the same method surface the rest of the plugin already calls.
 
 import { spawn } from "node:child_process";
 
+import { createOpencodeClient } from "../vendor/opencode-sdk/client.js";
 import { isSessionBusy, lastAssistantMessage } from "./response.mjs";
 
 const DEFAULT_PORT = 4096;
 const DEFAULT_HOST = "127.0.0.1";
 const SERVER_START_TIMEOUT = 30_000;
 
-// Per-request HTTP timeout for short calls (status/messages/dispatch). Long
-// tasks never ride a single request — see sendPromptAndWait.
+// Per-request HTTP timeout. We only ever dispatch prompts asynchronously
+// (prompt_async returns immediately), so no single request is long-lived; this
+// bounds individual calls (status polls, message fetches, etc.) so a hung
+// localhost socket can't stall a task forever.
 const REQUEST_TIMEOUT = Number(process.env.OPENCODE_REQUEST_TIMEOUT_MS) || 300_000;
 // Overall budget for a task to finish while we poll for completion.
 const TASK_TIMEOUT = Number(process.env.OPENCODE_TASK_TIMEOUT_MS) || 1_800_000; // 30 min
@@ -76,132 +81,102 @@ export async function ensureServer(opts = {}) {
 
 /**
  * Create an API client bound to a running OpenCode server.
+ *
+ * Wraps the typed `@opencode-ai/sdk` client. The client is configured with
+ * `responseStyle: "data"` + `throwOnError: true`, so each method returns the
+ * unwrapped response body and throws on a non-2xx status — the same contract
+ * the rest of the plugin relied on from the previous hand-rolled client.
+ *
  * @param {string} baseUrl
  * @param {object} [opts]
- * @param {string} [opts.directory] - workspace directory for x-opencode-directory header
- * @returns {OpenCodeClient}
+ * @param {string} [opts.directory] - workspace directory to scope operations to
+ * @returns {object}
  */
 export function createClient(baseUrl, opts = {}) {
-  const headers = {
-    "Content-Type": "application/json",
+  const directory = opts.directory;
+
+  const config = {
+    baseUrl,
+    responseStyle: "data",
+    throwOnError: true,
+    // Bound every request. The SDK's default fetch disables timeouts, which
+    // would let a hung socket stall the status-poll loop past its deadline.
+    fetch: (req) => fetch(req, { signal: AbortSignal.timeout(REQUEST_TIMEOUT) }),
   };
-  if (opts.directory) {
-    headers["x-opencode-directory"] = opts.directory;
-  }
+  if (directory) config.directory = directory;
   if (process.env.OPENCODE_SERVER_PASSWORD) {
     const user = process.env.OPENCODE_SERVER_USERNAME ?? "opencode";
     const cred = Buffer.from(`${user}:${process.env.OPENCODE_SERVER_PASSWORD}`).toString("base64");
-    headers["Authorization"] = `Basic ${cred}`;
+    config.headers = { Authorization: `Basic ${cred}` };
   }
 
-  async function request(method, path, body) {
-    const res = await fetch(`${baseUrl}${path}`, {
-      method,
-      headers,
-      body: body != null ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`OpenCode API ${method} ${path} returned ${res.status}: ${text}`);
-    }
-    const ct = res.headers.get("content-type") ?? "";
-    if (ct.includes("application/json")) {
-      return res.json();
-    }
-    return res.text();
-  }
+  const sdk = createOpencodeClient(config);
+
+  // OpenCode scopes operations by the `directory` query param. The SDK's
+  // client-level `directory` only backfills it onto GET/HEAD requests, so we
+  // pass it explicitly on every session call (including POST mutations) to
+  // ensure work targets the project dir even on a shared :4096 server.
+  const withDir = (extra) => {
+    const q = { ...(directory ? { directory } : {}), ...extra };
+    return Object.keys(q).length ? q : undefined;
+  };
 
   return {
     baseUrl,
 
-    // Health
-    health: () => request("GET", "/global/health"),
-
     // Sessions
-    listSessions: () => request("GET", "/session"),
-    createSession: (opts = {}) => request("POST", "/session", opts),
-    getSession: (id) => request("GET", `/session/${id}`),
-    deleteSession: (id) => request("DELETE", `/session/${id}`),
-    abortSession: (id) => request("POST", `/session/${id}/abort`),
-    getSessionStatus: () => request("GET", "/session/status"),
-    getSessionDiff: (id) => request("GET", `/session/${id}/diff`),
+    createSession: (sessionOpts = {}) =>
+      sdk.session.create({ body: sessionOpts, query: withDir() }),
+    abortSession: (id) => sdk.session.abort({ path: { id }, query: withDir() }),
+    getSessionStatus: () => sdk.session.status({ query: withDir() }),
+    getSessionDiff: (id) => sdk.session.diff({ path: { id }, query: withDir() }),
 
     // Messages
-    getMessages: (sessionId, opts = {}) => {
-      const params = new URLSearchParams();
-      if (opts.limit) params.set("limit", String(opts.limit));
-      if (opts.before) params.set("before", opts.before);
-      const qs = params.toString();
-      return request("GET", `/session/${sessionId}/message${qs ? "?" + qs : ""}`);
-    },
-
-    /**
-     * Send a prompt (synchronous / streaming).
-     * Returns the full response text from SSE stream.
-     */
-    sendPrompt: async (sessionId, promptText, opts = {}) => {
-      const body = {
-        parts: [{ type: "text", text: promptText }],
-      };
-      if (opts.agent) body.agent = opts.agent;
-      if (opts.model) body.model = opts.model;
-      if (opts.system) body.system = opts.system;
-
-      const res = await fetch(`${baseUrl}/session/${sessionId}/message`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(600_000), // 10 min for long tasks
-      });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`OpenCode prompt failed ${res.status}: ${text}`);
-      }
-
-      return res.json();
+    getMessages: (sessionId, msgOpts = {}) => {
+      const extra = {};
+      if (msgOpts.limit) extra.limit = msgOpts.limit;
+      if (msgOpts.before) extra.before = msgOpts.before;
+      return sdk.session.messages({ path: { id: sessionId }, query: withDir(extra) });
     },
 
     /**
      * Send a prompt asynchronously (returns immediately).
      */
-    sendPromptAsync: (sessionId, promptText, opts = {}) => {
-      const body = {
-        parts: [{ type: "text", text: promptText }],
-      };
-      if (opts.agent) body.agent = opts.agent;
-      if (opts.model) body.model = opts.model;
-      return request("POST", `/session/${sessionId}/prompt_async`, body);
-    },
+    sendPromptAsync: (sessionId, promptText, sendOpts = {}) =>
+      sdk.session.promptAsync({
+        path: { id: sessionId },
+        query: withDir(),
+        body: buildPromptBody(promptText, sendOpts),
+      }),
 
     /**
      * Dispatch a prompt asynchronously, then poll session status until the
      * session is no longer busy, and return the final assistant message
-     * ({ info, parts }) — the same shape the synchronous sendPrompt returned.
+     * ({ info, parts }).
      *
      * No single fetch is held open for the task's whole duration, so this is
-     * immune to the ~5-minute headers timeout that breaks the synchronous path
-     * on long tasks. Transient status-poll errors are retried, not treated as
+     * immune to the ~5-minute headers timeout that breaks a synchronous send on
+     * long tasks. Transient status-poll errors are retried, not treated as
      * task failure.
      * @param {string} sessionId
      * @param {string} promptText
-     * @param {object} [opts] - { agent, model, timeoutMs, pollMs }
+     * @param {object} [sendOpts] - { agent, model, timeoutMs, pollMs }
      * @returns {Promise<object|null>}
      */
-    sendPromptAndWait: async (sessionId, promptText, opts = {}) => {
-      const body = { parts: [{ type: "text", text: promptText }] };
-      if (opts.agent) body.agent = opts.agent;
-      if (opts.model) body.model = opts.model;
-      await request("POST", `/session/${sessionId}/prompt_async`, body);
+    sendPromptAndWait: async (sessionId, promptText, sendOpts = {}) => {
+      await sdk.session.promptAsync({
+        path: { id: sessionId },
+        query: withDir(),
+        body: buildPromptBody(promptText, sendOpts),
+      });
 
-      const pollMs = opts.pollMs ?? POLL_INTERVAL;
-      const deadline = Date.now() + (opts.timeoutMs ?? TASK_TIMEOUT);
+      const pollMs = sendOpts.pollMs ?? POLL_INTERVAL;
+      const deadline = Date.now() + (sendOpts.timeoutMs ?? TASK_TIMEOUT);
       while (true) {
         await sleep(pollMs);
         let statusMap;
         try {
-          statusMap = await request("GET", "/session/status");
+          statusMap = await sdk.session.status({ query: withDir() });
         } catch {
           // Transient poll failure: the session may still be running.
           // Retry rather than declaring the task failed (avoids false negatives).
@@ -211,35 +186,35 @@ export function createClient(baseUrl, opts = {}) {
         if (!isSessionBusy(statusMap, sessionId)) break;
         if (Date.now() > deadline) {
           throw new Error(
-            `Timed out after ${Math.round((opts.timeoutMs ?? TASK_TIMEOUT) / 1000)}s ` +
+            `Timed out after ${Math.round((sendOpts.timeoutMs ?? TASK_TIMEOUT) / 1000)}s ` +
               `waiting for session ${sessionId}. It may still be running — ` +
               "check `/opencode:status` and the OpenCode logs."
           );
         }
       }
 
-      const messages = await request("GET", `/session/${sessionId}/message`);
+      const messages = await sdk.session.messages({
+        path: { id: sessionId },
+        query: withDir(),
+      });
       return lastAssistantMessage(messages);
     },
 
-    // Agents
-    listAgents: () => request("GET", "/agent"),
-
-    // Providers
-    listProviders: () => request("GET", "/provider"),
-    getProviderAuth: () => request("GET", "/provider/auth"),
-
-    // Config
-    getConfig: () => request("GET", "/config"),
-
-    // Events (SSE) - returns a ReadableStream
-    subscribeEvents: async () => {
-      const res = await fetch(`${baseUrl}/event`, {
-        headers: { ...headers, Accept: "text/event-stream" },
-      });
-      return res.body;
-    },
+    // Providers — returns the current OpenCode shape { all, default, connected }.
+    listProviders: () => sdk.provider.list(),
   };
+}
+
+/**
+ * Build the message body sent to /session/:id/{message,prompt_async}.
+ * @param {string} promptText
+ * @param {object} opts - { agent, model }
+ */
+function buildPromptBody(promptText, opts = {}) {
+  const body = { parts: [{ type: "text", text: promptText }] };
+  if (opts.agent) body.agent = opts.agent;
+  if (opts.model) body.model = opts.model; // { providerID, modelID }
+  return body;
 }
 
 /**

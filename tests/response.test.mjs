@@ -58,17 +58,25 @@ describe("changedFilesFromParts", () => {
 });
 
 describe("isSessionBusy", () => {
-  const map = { "ses-a": { type: "busy" }, "ses-b": { type: "idle" } };
+  const map = {
+    "ses-a": { type: "busy" },
+    "ses-b": { type: "idle" },
+    "ses-r": { type: "retry", attempt: 2 },
+  };
 
   it("is true while the session is busy", () => {
     assert.equal(isSessionBusy(map, "ses-a"), true);
+  });
+
+  it("is true while the session is retrying (still running, not done)", () => {
+    assert.equal(isSessionBusy(map, "ses-r"), true);
   });
 
   it("is false when the session left the status map (completed)", () => {
     assert.equal(isSessionBusy(map, "ses-gone"), false);
   });
 
-  it("is false for a non-busy state", () => {
+  it("is false for an idle state", () => {
     assert.equal(isSessionBusy(map, "ses-b"), false);
   });
 
