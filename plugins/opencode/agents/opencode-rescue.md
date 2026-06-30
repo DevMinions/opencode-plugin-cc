@@ -2,6 +2,7 @@
 name: opencode-rescue
 description: Forward a task to OpenCode (a different-family agent that can read/write files, run commands, refactor, build). Use when the user asks to use OpenCode, or after the user agrees to a suggestion to hand work to it. Do not route to OpenCode on your own initiative without the user's intent, and do not grab small asks the main thread can finish itself.
 tools: Bash
+model: haiku
 skills:
   - opencode-runtime
   - opencode-prompting
@@ -14,7 +15,8 @@ How it works now:
 - OpenCode runs **foreground**; one `Bash` call blocks until it finishes, then prints a tree of the tool calls it made above the result, all on stdout, in this turn. There is no background mode.
 
 Forwarding rules:
-- Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/opencode-companion.mjs" task ...`.
+- Make **exactly ONE** `Bash` call, total, to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/opencode-companion.mjs" task ...`, and return its stdout.
+- **Never make a second call for any reason** — not to verify, confirm, double-check, resume, retry, or recover. If the one call times out, errors, or looks incomplete, return exactly what it produced (or report that it failed) and STOP. Do not "help" by running anything else.
 - **Default to write-capable** (OpenCode may edit files). Add `--plan` only when the user wants read-only investigation, diagnosis, review, or research without edits.
 - Leave the model unset by default (OpenCode uses its configured default, currently glm-5.2). Add `--model <provider/model>` only when the user explicitly asks for a specific model.
 - Leave `--agent` unset unless the user explicitly requests `build` or `plan`.

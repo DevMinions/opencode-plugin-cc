@@ -70,6 +70,37 @@ function gracefulExit(code) {
 }
 
 // ------------------------------------------------------------------
+// Active-session tracking, so a cancel (SIGINT/SIGTERM) aborts the running
+// OpenCode session instead of leaving it churning server-side.
+// ------------------------------------------------------------------
+
+let activeSession = null; // { client, id } while a session is in flight
+
+function setActiveSession(client, id) {
+  activeSession = id ? { client, id } : null;
+}
+
+async function abortActiveSession() {
+  const s = activeSession;
+  activeSession = null;
+  if (!s) return;
+  try {
+    await s.client.abortSession(s.id);
+  } catch {
+    // Best-effort.
+  }
+}
+
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => {
+    const code = sig === "SIGINT" ? 130 : 143;
+    abortActiveSession().finally(() => process.exit(code));
+    // Hard cap: never linger if the abort request itself hangs.
+    setTimeout(() => process.exit(code), 800).unref();
+  });
+}
+
+// ------------------------------------------------------------------
 // Foreground runner — prints a "what it did" tool-call tree on completion
 // ------------------------------------------------------------------
 
@@ -191,6 +222,7 @@ async function runReview(argv, { adversarial }) {
     const result = await runForeground(label, async () => {
       const client = await connect({ cwd: workspace });
       const session = await client.createSession({ title: `${label} ${Date.now().toString(36)}` });
+      setActiveSession(client, session.id); // so a cancel aborts it server-side
       const prompt = await buildReviewPrompt(workspace, { base: options.base, adversarial, focus }, PLUGIN_ROOT);
       const response = await client.sendPromptAndWait(session.id, prompt, { agent: "plan" });
       const treeLines = buildToolTree(await safeGetMessages(client, session.id));
@@ -198,6 +230,7 @@ async function runReview(argv, { adversarial }) {
       const structured = tryParseJson(text);
       return { rendered: structured ? renderReview(structured) : text, treeLines };
     });
+    setActiveSession(null); // completed normally
     console.log(result.rendered);
   } catch (err) {
     console.error(`${adversarial ? "Adversarial review" : "Review"} failed: ${err.message}`);
@@ -255,6 +288,7 @@ async function handleTask(argv) {
         const session = await client.createSession({ title: `Task ${Date.now().toString(36)}` });
         sessionId = session.id;
       }
+      setActiveSession(client, sessionId); // so a cancel aborts it server-side
 
       const prompt = buildTaskPrompt(taskText, { write: isWrite });
       const sendOpts = { agent: agentName };
@@ -275,6 +309,7 @@ async function handleTask(argv) {
       };
     });
 
+    setActiveSession(null); // completed normally — nothing to abort on a late signal
     if (sessionId) recordSession(workspace, sessionId);
 
     if (result.incomplete) {

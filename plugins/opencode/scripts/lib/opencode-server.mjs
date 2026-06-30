@@ -209,10 +209,17 @@ export function createClient(baseUrl, opts = {}) {
         }
         if (!isSessionBusy(statusMap, sessionId)) break;
         if (Date.now() > deadline) {
+          // We're giving up — abort the server-side session so OpenCode doesn't
+          // keep churning (and burning provider compute) after we stop waiting.
+          try {
+            await sdk.session.abort({ path: { id: sessionId }, query: withDir() });
+          } catch {
+            // Best-effort; the throw below still surfaces the timeout.
+          }
           throw new Error(
             `Timed out after ${Math.round((sendOpts.timeoutMs ?? TASK_TIMEOUT) / 1000)}s ` +
-              `waiting for session ${sessionId}. It may still be running — ` +
-              "check the OpenCode logs."
+              `waiting for session ${sessionId} (aborted it). It may have partially ` +
+              "completed — check the working tree and OpenCode logs."
           );
         }
       }
