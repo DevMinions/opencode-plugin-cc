@@ -22,7 +22,7 @@ Execution rules:
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
 
 Command selection:
-- Use exactly one `task` invocation per rescue handoff. `task` always runs foreground and streams its progress; there is no background mode.
+- Use exactly one `task` invocation per rescue handoff. `task` always runs foreground and, on completion, prints a tool-call tree of what it did above the result; there is no background mode.
 - If the forwarded request includes `--plan` (read-only), pass it through to `task`.
 - If the forwarded request includes `--model`, pass it through to `task`.
 - If the forwarded request includes `--agent`, pass it through to `task`.

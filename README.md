@@ -13,7 +13,7 @@ they already have.
 
 ## What You Get
 
-- `/opencode:rescue` to hand OpenCode any task — investigate, fix, refactor, build (foreground, streaming, can edit files)
+- `/opencode:rescue` to hand OpenCode any task — investigate, fix, refactor, build (foreground, shows its tool-call tree, can edit files)
 - `/opencode:review` for a normal read-only OpenCode review
 - `/opencode:adversarial-review` for a steerable challenge review
 - `/opencode:setup` to check install/auth
@@ -82,13 +82,13 @@ To check your configured providers:
 |---|---|---|
 | `/codex:review` | `/opencode:review` | Read-only code review |
 | `/codex:adversarial-review` | `/opencode:adversarial-review` | Adversarial challenge review |
-| `/codex:rescue` | `/opencode:rescue` | Hand any task to OpenCode (foreground, streaming, can edit files) |
+| `/codex:rescue` | `/opencode:rescue` | Hand any task to OpenCode (foreground, shows what it did, can edit files) |
 | `/codex:setup` | `/opencode:setup` | Check install/auth |
 
 ## Slash Commands
 
-- `/opencode:rescue <task>` -- Hand any task to OpenCode via the `opencode:opencode-rescue` subagent. Runs **foreground** and **streams its tool calls live**; can read/write files. Defaults to write-capable `build` and OpenCode's configured default model (currently `glm-5.2`). Supports `--plan` (read-only), `--model <provider/model>`, `--agent <build|plan>`, `--resume`, `--fresh`.
-- `/opencode:review` -- Normal OpenCode code review (read-only, foreground/streaming). Supports `--base <ref>`.
+- `/opencode:rescue <task>` -- Hand any task to OpenCode via the `opencode:opencode-rescue` subagent. Runs **foreground**; on completion it prints a **tree of the tool calls it made** above the result, so you can see what it did. Can read/write files. Defaults to write-capable `build` and OpenCode's configured default model (currently `glm-5.2`). Supports `--plan` (read-only), `--model <provider/model>`, `--agent <build|plan>`, `--resume`, `--fresh`.
+- `/opencode:review` -- Normal OpenCode code review (read-only, foreground). Supports `--base <ref>`.
 - `/opencode:adversarial-review` -- Steerable review that challenges implementation and design decisions. Accepts custom focus text.
 - `/opencode:setup` -- Checks OpenCode install/auth and configured providers.
 
@@ -126,8 +126,8 @@ Unlike codex-plugin-cc which uses JSON-RPC over stdin/stdout, this plugin commun
 OpenCode over its HTTP API using OpenCode's official typed client (`@opencode-ai/sdk`, vendored
 under `plugins/opencode/scripts/vendor/` so no install step is needed). The server is warmed at
 session start (SessionStart hook) and managed by the companion scripts. Each dispatch runs in the
-**foreground**, streaming OpenCode's tool calls live while polling session status for completion —
-there is no background-job machinery.
+**foreground** (polling session status for completion) and, when done, prints a tool-call tree of
+what OpenCode did above the result — all on stdout. There is no background-job machinery.
 
 ```
 codex-plugin-cc                          opencode-plugin-cc
@@ -157,10 +157,10 @@ opencode-plugin-cc/
 │   ├── prompts/                          # Prompt templates
 │   ├── schemas/                          # Output schemas
 │   ├── scripts/                          # Node.js runtime
-│   │   ├── opencode-companion.mjs        # CLI entry point (foreground, streaming)
+│   │   ├── opencode-companion.mjs        # CLI entry point (foreground; prints tool-call tree + result)
 │   │   ├── warm-server-hook.mjs          # SessionStart: warm the OpenCode server
 │   │   └── lib/                          # Core modules
-│   │       ├── opencode-server.mjs       # HTTP API client + live streaming
+│   │       ├── opencode-server.mjs       # HTTP API client
 │   │       ├── session-memory.mjs        # Last-session memory for --resume-last
 │   │       ├── render.mjs               # Output rendering
 │   │       ├── prompts.mjs              # Prompt construction

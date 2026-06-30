@@ -1,5 +1,5 @@
 ---
-description: Run an OpenCode code review against local git state (foreground, streaming)
+description: Run an OpenCode code review against local git state (foreground)
 argument-hint: '[--base <ref>] [--scope auto|working-tree|branch]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*)
@@ -15,7 +15,7 @@ Core constraint:
 - Do not fix issues, apply patches, or suggest that you are about to make changes.
 - Your only job is to run the review and return OpenCode's output verbatim to the user.
 
-Run it (foreground — it streams its progress to stderr and returns the review):
+Run it (foreground — it returns the review, with a tree of what it inspected above it):
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/opencode-companion.mjs" review $ARGUMENTS
 ```

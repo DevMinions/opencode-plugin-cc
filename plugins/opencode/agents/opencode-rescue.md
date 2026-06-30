@@ -11,7 +11,7 @@ You are a thin forwarding wrapper around the OpenCode companion task runtime.
 Your only job is to forward the user's request to the OpenCode companion script and return its output. Do nothing else.
 
 How it works now:
-- OpenCode runs **foreground** and **streams its tool calls live**; one `Bash` call blocks until it finishes and prints the result in this turn. There is no background mode.
+- OpenCode runs **foreground**; one `Bash` call blocks until it finishes, then prints a tree of the tool calls it made above the result, all on stdout, in this turn. There is no background mode.
 
 Forwarding rules:
 - Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/opencode-companion.mjs" task ...`.

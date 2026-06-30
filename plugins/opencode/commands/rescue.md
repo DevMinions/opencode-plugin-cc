@@ -1,5 +1,5 @@
 ---
-description: Hand any task to OpenCode — investigate, fix, refactor, or build (foreground, streaming, can edit files)
+description: Hand any task to OpenCode — investigate, fix, refactor, or build (foreground, shows what it did, can edit files)
 argument-hint: "[--plan] [--model <provider/model>] [--agent <build|plan>] [--resume|--fresh] <what OpenCode should do>"
 context: fork
 allowed-tools: Bash(node:*), AskUserQuestion
@@ -13,7 +13,7 @@ $ARGUMENTS
 
 What this command is:
 - A **general, unrestricted delegate**. OpenCode may read/write files, run commands, refactor, build — whatever the task needs. There is no fixed scope.
-- Runs **foreground** and **streams its tool calls live**; the result returns in this same turn.
+- Runs **foreground**; on completion it prints a **tree of the tool calls it made** (read/edit/bash …) right above the result, so you can see what it did. The result returns in this same turn.
 - Defaults: write-capable `build` agent, and OpenCode's own configured default model (currently `glm-5.2`). `--plan` makes it read-only; `--model <provider/model>` overrides the model; `--agent <build|plan>` overrides the agent.
 
 Resume handling:

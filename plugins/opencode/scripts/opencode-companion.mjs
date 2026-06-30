@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-// OpenCode Companion — foreground, streaming entry point for the Claude Code plugin.
-// One blocking call per dispatch: connect → prompt → live-stream tool calls →
-// return the result. No background workers, no job state, no polling relay.
+// OpenCode Companion — foreground entry point for the Claude Code plugin.
+// One blocking call per dispatch: connect → prompt → poll to completion → print
+// a "what it did" tool-call tree + the result. No background workers, no job
+// state, no polling relay.
 
 import path from "node:path";
 import process from "node:process";
@@ -69,50 +70,81 @@ function gracefulExit(code) {
 }
 
 // ------------------------------------------------------------------
-// Foreground runner with live streaming to stderr
+// Foreground runner — prints a "what it did" tool-call tree on completion
 // ------------------------------------------------------------------
 
 /**
- * Run a foreground OpenCode interaction, streaming its tool calls live to
- * stderr (so stdout stays clean for the final result the subagent returns
- * verbatim). The runner gets an `onProgress(part)` sink to hand to
- * sendPromptAndWait.
+ * Run a foreground OpenCode interaction and, on completion, print a compact
+ * "what it did" tool-call tree to STDOUT right above the result. Claude Code
+ * buffers tool output and only surfaces a subagent's returned stdout, so the
+ * tree must be on stdout to be visible to the user once the task finishes.
+ * The runner returns a result object that may carry `treeLines`.
  * @param {string} label - e.g. "glm-5.2 · build"
- * @param {(onProgress: Function) => Promise<object>} runner
+ * @param {() => Promise<object>} runner
  */
 async function runForeground(label, runner) {
-  process.stderr.write(`\n  opencode · ${label}\n`);
   const t0 = Date.now();
-  const onProgress = (part) => {
-    const line = formatProgressPart(part);
-    if (line) process.stderr.write(`  ${line}\n`);
-  };
   try {
-    const result = await runner(onProgress);
+    const result = await runner();
     const secs = ((Date.now() - t0) / 1000).toFixed(0);
-    process.stderr.write(`  └ ✓ done (${secs}s)\n\n`);
+    const tree = [`opencode · ${label}`, ...(result.treeLines ?? []), `✓ done (${secs}s)`];
+    process.stdout.write(tree.join("\n") + "\n\n");
     return result;
   } catch (err) {
-    process.stderr.write(`  └ ✗ ${err.message}\n\n`);
+    process.stdout.write(`opencode · ${label}\n✗ ${err.message}\n\n`);
     throw err;
   }
 }
 
 /**
- * Format a streamed tool-call part as a one-line "watch it work" entry.
+ * Build the "what it did" tree (one line per tool call, in order) from the
+ * session's final assistant messages — computed once, so each tool call is
+ * counted exactly once (no per-poll duplication).
+ * @param {Array} messages
+ * @returns {string[]}
+ */
+function buildToolTree(messages) {
+  const lines = [];
+  for (const m of messages ?? []) {
+    if ((m?.info?.role ?? m?.role) !== "assistant") continue;
+    for (const part of m?.parts ?? []) {
+      const line = formatToolLine(part);
+      if (line) lines.push(line);
+    }
+  }
+  return lines;
+}
+
+/**
+ * Format a tool-call part as a one-line tree entry. For file paths, keep the
+ * tail (the filename) visible rather than the long /tmp/... prefix.
  * @param {object} part
  * @returns {string|null}
  */
-function formatProgressPart(part) {
+function formatToolLine(part) {
   if (!part || part.type !== "tool") return null;
   const tool = part.tool ?? part.name ?? "tool";
   const input = part.state?.input ?? part.input ?? {};
-  const raw =
-    input.filePath ?? input.path ?? input.file ?? input.command ??
-    input.pattern ?? input.query ?? input.url ?? "";
-  const target = String(raw).replace(/\s+/g, " ").trim();
-  const shown = target.length > 80 ? target.slice(0, 77) + "…" : target;
-  return `├ ${tool}${shown ? "  " + shown : ""}`;
+  const filePath = input.filePath ?? input.path ?? input.file;
+  const other = input.command ?? input.pattern ?? input.query ?? input.url;
+  let target = "";
+  if (filePath) {
+    const p = String(filePath);
+    target = p.length > 50 ? "…" + p.slice(-49) : p; // keep the filename end
+  } else if (other) {
+    const o = String(other).replace(/\s+/g, " ").trim();
+    target = o.length > 60 ? o.slice(0, 57) + "…" : o;
+  }
+  return `├ ${tool}${target ? "  " + target : ""}`;
+}
+
+/** Fetch the session's messages, returning [] on any error. */
+async function safeGetMessages(client, sessionId) {
+  try {
+    return (await client.getMessages(sessionId)) ?? [];
+  } catch {
+    return [];
+  }
 }
 
 // ------------------------------------------------------------------
@@ -156,14 +188,15 @@ async function runReview(argv, { adversarial }) {
   const label = adversarial ? "review · adversarial" : "review";
 
   try {
-    const result = await runForeground(label, async (onProgress) => {
+    const result = await runForeground(label, async () => {
       const client = await connect({ cwd: workspace });
       const session = await client.createSession({ title: `${label} ${Date.now().toString(36)}` });
       const prompt = await buildReviewPrompt(workspace, { base: options.base, adversarial, focus }, PLUGIN_ROOT);
-      const response = await client.sendPromptAndWait(session.id, prompt, { agent: "plan", onProgress });
+      const response = await client.sendPromptAndWait(session.id, prompt, { agent: "plan" });
+      const treeLines = buildToolTree(await safeGetMessages(client, session.id));
       const text = extractResponseText(response);
       const structured = tryParseJson(text);
-      return { rendered: structured ? renderReview(structured) : text };
+      return { rendered: structured ? renderReview(structured) : text, treeLines };
     });
     console.log(result.rendered);
   } catch (err) {
@@ -213,7 +246,7 @@ async function handleTask(argv) {
 
   let sessionId = null;
   try {
-    const result = await runForeground(`${modelLabel} · ${agentName}`, async (onProgress) => {
+    const result = await runForeground(`${modelLabel} · ${agentName}`, async () => {
       const client = await connect({ cwd: workspace });
 
       if (resumeSessionId) {
@@ -224,15 +257,18 @@ async function handleTask(argv) {
       }
 
       const prompt = buildTaskPrompt(taskText, { write: isWrite });
-      const sendOpts = { agent: agentName, onProgress };
+      const sendOpts = { agent: agentName };
       if (options.model) sendOpts.model = parseModelOption(options.model);
 
       const response = await client.sendPromptAndWait(sessionId, prompt, sendOpts);
+      const messages = await safeGetMessages(client, sessionId);
+      const treeLines = buildToolTree(messages);
       const text = extractResponseText(response);
-      const changedFiles = await collectChangedFiles(client, sessionId, response, isWrite);
+      const changedFiles = await collectChangedFiles(client, sessionId, messages, response, isWrite);
       const finishReason = detectIncompleteFinish(response);
       return {
         rendered: text,
+        treeLines,
         changedFiles,
         incomplete: !!finishReason,
         finishReason: finishReason ?? undefined,
@@ -305,19 +341,16 @@ function extractResponseText(response) {
 }
 
 /**
- * Collect files changed by a write-mode task: write/edit tool-call parts across
- * the whole session, plus the session diff as a best-effort secondary source.
+ * Collect files changed by a write-mode task from the already-fetched session
+ * messages (write/edit tool-call parts), plus the session diff as a best-effort
+ * secondary source.
  * @returns {Promise<string[]>}
  */
-async function collectChangedFiles(client, sessionId, response, isWrite) {
+async function collectChangedFiles(client, sessionId, messages, response, isWrite) {
   if (!isWrite) return [];
   const files = new Set();
-  try {
-    const messages = await client.getMessages(sessionId);
-    for (const m of messages ?? []) for (const p of changedFilesFromParts(m)) files.add(p);
-  } catch {
-    for (const p of changedFilesFromParts(response)) files.add(p);
-  }
+  const msgs = messages?.length ? messages : response ? [response] : [];
+  for (const m of msgs) for (const p of changedFilesFromParts(m)) files.add(p);
   try {
     const diff = await client.getSessionDiff(sessionId);
     const fileDiffs = Array.isArray(diff) ? diff : diff?.files ?? [];
