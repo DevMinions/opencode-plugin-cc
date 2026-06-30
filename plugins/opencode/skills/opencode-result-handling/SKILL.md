@@ -16,14 +16,13 @@ OpenCode returns results as structured session data containing:
 
 ## Presenting Results
 
-When displaying results from `/opencode:result`:
-1. Show the session ID for reference
-2. Present the final assistant message as the primary output
-3. If file changes were made, summarize which files were modified
-4. Include the session status (completed/aborted/error)
+When presenting OpenCode's output (the companion prints it to stdout; tool calls stream live to stderr while it runs):
+1. Present the final assistant message as the primary output
+2. If file changes were made, the companion footer lists them — surface which files were modified
+3. Note the session id from the footer for follow-ups
 
 ## Resuming Sessions
 
 OpenCode sessions can be resumed by sending additional messages to the same session.
-The `--resume-last` flag in the companion script handles this by reusing the last session ID
-from the current workspace state.
+The `--resume-last` flag in the companion script handles this by reusing the last session id
+recorded for the current workspace (see `lib/session-memory.mjs`).

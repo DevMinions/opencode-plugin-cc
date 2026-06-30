@@ -13,9 +13,10 @@ they already have.
 
 ## What You Get
 
+- `/opencode:rescue` to hand OpenCode any task — investigate, fix, refactor, build (foreground, streaming, can edit files)
 - `/opencode:review` for a normal read-only OpenCode review
 - `/opencode:adversarial-review` for a steerable challenge review
-- `/opencode:rescue`, `/opencode:status`, `/opencode:result`, and `/opencode:cancel` to delegate work and manage background jobs
+- `/opencode:setup` to check install/auth
 
 ## Requirements
 
@@ -41,7 +42,7 @@ Then reload the plugin:
 You should see:
 
 ```
-Reloaded: 1 plugin · 7 skills · 6 agents · 3 hooks ...
+Reloaded: 1 plugin · ... · 1 hook ...
 ```
 
 Finally, verify your setup:
@@ -81,25 +82,15 @@ To check your configured providers:
 |---|---|---|
 | `/codex:review` | `/opencode:review` | Read-only code review |
 | `/codex:adversarial-review` | `/opencode:adversarial-review` | Adversarial challenge review |
-| `/codex:rescue` | `/opencode:rescue` | Delegate tasks to external agent |
-| `/codex:status` | `/opencode:status` | Show running/recent jobs |
-| `/codex:result` | `/opencode:result` | Show finished job output |
-| `/codex:cancel` | `/opencode:cancel` | Cancel active background job |
-| `/codex:setup` | `/opencode:setup` | Check install/auth, toggle review gate |
+| `/codex:rescue` | `/opencode:rescue` | Hand any task to OpenCode (foreground, streaming, can edit files) |
+| `/codex:setup` | `/opencode:setup` | Check install/auth |
 
 ## Slash Commands
 
-- `/opencode:review` -- Normal OpenCode code review (read-only). Supports `--base <ref>`, `--wait`, `--background`.
+- `/opencode:rescue <task>` -- Hand any task to OpenCode via the `opencode:opencode-rescue` subagent. Runs **foreground** and **streams its tool calls live**; can read/write files. Defaults to write-capable `build` and OpenCode's configured default model (currently `glm-5.2`). Supports `--plan` (read-only), `--model <provider/model>`, `--agent <build|plan>`, `--resume`, `--fresh`.
+- `/opencode:review` -- Normal OpenCode code review (read-only, foreground/streaming). Supports `--base <ref>`.
 - `/opencode:adversarial-review` -- Steerable review that challenges implementation and design decisions. Accepts custom focus text.
-- `/opencode:rescue` -- Delegates a task to OpenCode via the `opencode:opencode-rescue` subagent. Supports `--model`, `--agent`, `--resume`, `--fresh`, `--background`.
-- `/opencode:status` -- Shows running/recent OpenCode jobs for the current repo.
-- `/opencode:result` -- Shows final output for a finished job, including OpenCode session ID for resuming.
-- `/opencode:cancel` -- Cancels an active background OpenCode job.
-- `/opencode:setup` -- Checks OpenCode install/auth, can enable/disable the review gate hook.
-
-## Review Gate
-
-When enabled via `/opencode:setup --enable-review-gate`, a Stop hook runs a targeted OpenCode review on Claude's response. If issues are found, the stop is blocked so Claude can address them first. Warning: can create long-running loops and drain usage limits.
+- `/opencode:setup` -- Checks OpenCode install/auth and configured providers.
 
 ## Troubleshooting
 
@@ -133,8 +124,10 @@ The script tries SSH first, then HTTPS. If both fail:
 
 Unlike codex-plugin-cc which uses JSON-RPC over stdin/stdout, this plugin communicates with
 OpenCode over its HTTP API using OpenCode's official typed client (`@opencode-ai/sdk`, vendored
-under `plugins/opencode/scripts/vendor/` so no install step is needed). The server is automatically
-started and managed by the companion scripts, which poll session status for task completion.
+under `plugins/opencode/scripts/vendor/` so no install step is needed). The server is warmed at
+session start (SessionStart hook) and managed by the companion scripts. Each dispatch runs in the
+**foreground**, streaming OpenCode's tool calls live while polling session status for completion —
+there is no background-job machinery.
 
 ```
 codex-plugin-cc                          opencode-plugin-cc
@@ -155,26 +148,20 @@ opencode-plugin-cc/
 ├── plugins/opencode/
 │   ├── .claude-plugin/plugin.json        # Plugin metadata
 │   ├── agents/opencode-rescue.md         # Rescue subagent definition
-│   ├── commands/                         # 7 slash commands
+│   ├── commands/                         # 4 slash commands
+│   │   ├── rescue.md
 │   │   ├── review.md
 │   │   ├── adversarial-review.md
-│   │   ├── rescue.md
-│   │   ├── status.md
-│   │   ├── result.md
-│   │   ├── cancel.md
 │   │   └── setup.md
-│   ├── hooks/hooks.json                  # Lifecycle hooks
+│   ├── hooks/hooks.json                  # SessionStart server warm-up
 │   ├── prompts/                          # Prompt templates
 │   ├── schemas/                          # Output schemas
 │   ├── scripts/                          # Node.js runtime
-│   │   ├── opencode-companion.mjs        # CLI entry point
-│   │   ├── session-lifecycle-hook.mjs
-│   │   ├── stop-review-gate-hook.mjs
+│   │   ├── opencode-companion.mjs        # CLI entry point (foreground, streaming)
+│   │   ├── warm-server-hook.mjs          # SessionStart: warm the OpenCode server
 │   │   └── lib/                          # Core modules
-│   │       ├── opencode-server.mjs       # HTTP API client
-│   │       ├── state.mjs                 # Persistent state
-│   │       ├── job-control.mjs           # Job management
-│   │       ├── tracked-jobs.mjs          # Job lifecycle tracking
+│   │       ├── opencode-server.mjs       # HTTP API client + live streaming
+│   │       ├── session-memory.mjs        # Last-session memory for --resume-last
 │   │       ├── render.mjs               # Output rendering
 │   │       ├── prompts.mjs              # Prompt construction
 │   │       ├── git.mjs                  # Git utilities

@@ -80,6 +80,59 @@ export async function ensureServer(opts = {}) {
 }
 
 /**
+ * Fire-and-forget: start the OpenCode server if it isn't running, WITHOUT
+ * waiting for readiness. Used by the SessionStart warm-up hook so the first
+ * real dispatch doesn't pay the ~cold-start cost. Returns true if it kicked off
+ * a new server, false if one was already up.
+ * @param {object} [opts]
+ * @param {number} [opts.port]
+ * @param {string} [opts.cwd]
+ * @returns {Promise<boolean>}
+ */
+export async function warmServer(opts = {}) {
+  const host = opts.host ?? DEFAULT_HOST;
+  const port = opts.port ?? DEFAULT_PORT;
+  if (await isServerRunning(host, port)) return false;
+  const proc = spawn("opencode", ["serve", "--port", String(port)], {
+    stdio: "ignore",
+    detached: true,
+    cwd: opts.cwd,
+    shell: process.platform === "win32",
+  });
+  proc.unref();
+  return true;
+}
+
+/**
+ * Forward newly-appeared tool-call parts to an onProgress callback exactly once.
+ * `seen` is a Set the caller threads across poll iterations to dedup. We only
+ * surface tool parts (read/edit/bash/grep/…) — the live "watch it work" signal —
+ * and skip streaming text deltas to keep the feed clean.
+ */
+function emitNewToolParts(messages, seen, onProgress) {
+  if (!Array.isArray(messages)) return;
+  for (let mi = 0; mi < messages.length; mi++) {
+    const m = messages[mi];
+    const role = m?.info?.role ?? m?.role;
+    if (role !== "assistant") continue;
+    const parts = m?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (let pi = 0; pi < parts.length; pi++) {
+      const part = parts[pi];
+      if (part?.type !== "tool") continue;
+      const key = `${m?.info?.id ?? mi}:${part.id ?? pi}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      try {
+        onProgress(part);
+      } catch {
+        // A bad render must never break the task.
+      }
+    }
+  }
+}
+
+/**
  * Create an API client bound to a running OpenCode server.
  *
  * Wraps the typed `@opencode-ai/sdk` client. The client is configured with
@@ -170,10 +223,22 @@ export function createClient(baseUrl, opts = {}) {
         body: buildPromptBody(promptText, sendOpts),
       });
 
-      const pollMs = sendOpts.pollMs ?? POLL_INTERVAL;
+      // Live progress: thread a `seen` Set across polls and emit new tool parts.
+      const onProgress = typeof sendOpts.onProgress === "function" ? sendOpts.onProgress : null;
+      const seen = new Set();
+      // Stream more responsively than we poll status when a progress sink is set.
+      const pollMs = sendOpts.pollMs ?? (onProgress ? Math.min(POLL_INTERVAL, 1000) : POLL_INTERVAL);
       const deadline = Date.now() + (sendOpts.timeoutMs ?? TASK_TIMEOUT);
       while (true) {
         await sleep(pollMs);
+        if (onProgress) {
+          try {
+            const live = await sdk.session.messages({ path: { id: sessionId }, query: withDir() });
+            emitNewToolParts(live, seen, onProgress);
+          } catch {
+            // Streaming is best-effort; never let it fail the task.
+          }
+        }
         let statusMap;
         try {
           statusMap = await sdk.session.status({ query: withDir() });
@@ -188,7 +253,7 @@ export function createClient(baseUrl, opts = {}) {
           throw new Error(
             `Timed out after ${Math.round((sendOpts.timeoutMs ?? TASK_TIMEOUT) / 1000)}s ` +
               `waiting for session ${sessionId}. It may still be running — ` +
-              "check `/opencode:status` and the OpenCode logs."
+              "check the OpenCode logs."
           );
         }
       }
@@ -197,6 +262,7 @@ export function createClient(baseUrl, opts = {}) {
         path: { id: sessionId },
         query: withDir(),
       });
+      if (onProgress) emitNewToolParts(messages, seen, onProgress); // flush any final parts
       return lastAssistantMessage(messages);
     },
 
