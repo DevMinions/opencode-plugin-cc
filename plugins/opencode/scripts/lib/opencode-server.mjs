@@ -104,35 +104,6 @@ export async function warmServer(opts = {}) {
 }
 
 /**
- * Forward newly-appeared tool-call parts to an onProgress callback exactly once.
- * `seen` is a Set the caller threads across poll iterations to dedup. We only
- * surface tool parts (read/edit/bash/grep/…) — the live "watch it work" signal —
- * and skip streaming text deltas to keep the feed clean.
- */
-function emitNewToolParts(messages, seen, onProgress) {
-  if (!Array.isArray(messages)) return;
-  for (let mi = 0; mi < messages.length; mi++) {
-    const m = messages[mi];
-    const role = m?.info?.role ?? m?.role;
-    if (role !== "assistant") continue;
-    const parts = m?.parts;
-    if (!Array.isArray(parts)) continue;
-    for (let pi = 0; pi < parts.length; pi++) {
-      const part = parts[pi];
-      if (part?.type !== "tool") continue;
-      const key = `${m?.info?.id ?? mi}:${part.id ?? pi}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      try {
-        onProgress(part);
-      } catch {
-        // A bad render must never break the task.
-      }
-    }
-  }
-}
-
-/**
  * Create an API client bound to a running OpenCode server.
  *
  * Wraps the typed `@opencode-ai/sdk` client. The client is configured with
@@ -223,22 +194,10 @@ export function createClient(baseUrl, opts = {}) {
         body: buildPromptBody(promptText, sendOpts),
       });
 
-      // Live progress: thread a `seen` Set across polls and emit new tool parts.
-      const onProgress = typeof sendOpts.onProgress === "function" ? sendOpts.onProgress : null;
-      const seen = new Set();
-      // Stream more responsively than we poll status when a progress sink is set.
-      const pollMs = sendOpts.pollMs ?? (onProgress ? Math.min(POLL_INTERVAL, 1000) : POLL_INTERVAL);
+      const pollMs = sendOpts.pollMs ?? POLL_INTERVAL;
       const deadline = Date.now() + (sendOpts.timeoutMs ?? TASK_TIMEOUT);
       while (true) {
         await sleep(pollMs);
-        if (onProgress) {
-          try {
-            const live = await sdk.session.messages({ path: { id: sessionId }, query: withDir() });
-            emitNewToolParts(live, seen, onProgress);
-          } catch {
-            // Streaming is best-effort; never let it fail the task.
-          }
-        }
         let statusMap;
         try {
           statusMap = await sdk.session.status({ query: withDir() });
@@ -262,7 +221,6 @@ export function createClient(baseUrl, opts = {}) {
         path: { id: sessionId },
         query: withDir(),
       });
-      if (onProgress) emitNewToolParts(messages, seen, onProgress); // flush any final parts
       return lastAssistantMessage(messages);
     },
 

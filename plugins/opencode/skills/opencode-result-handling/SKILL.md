@@ -16,7 +16,7 @@ OpenCode returns results as structured session data containing:
 
 ## Presenting Results
 
-When presenting OpenCode's output (the companion prints it to stdout; tool calls stream live to stderr while it runs):
+When presenting OpenCode's output (the companion prints a tool-call tree of what it did, then the result, then a footer — all on stdout):
 1. Present the final assistant message as the primary output
 2. If file changes were made, the companion footer lists them — surface which files were modified
 3. Note the session id from the footer for follow-ups
