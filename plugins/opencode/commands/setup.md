@@ -1,6 +1,6 @@
 ---
-description: Check whether the local OpenCode CLI is ready and optionally toggle the stop-time review gate
-argument-hint: '[--enable-review-gate|--disable-review-gate]'
+description: Check whether the local OpenCode CLI is ready (install status, version, server, providers)
+argument-hint: ''
 allowed-tools: Bash(node:*), Bash(npm:*), Bash(brew:*), Bash(curl:*), AskUserQuestion
 ---
 
